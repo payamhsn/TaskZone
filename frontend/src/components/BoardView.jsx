@@ -2,6 +2,21 @@ import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useParams } from "react-router-dom";
 import { Plus, MoreVertical } from "lucide-react";
+import {
+  DndContext,
+  DragOverlay,
+  closestCorners,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import TaskCard from "./TaskCard";
+import TaskModal from "./TaskModal";
 
 const BoardView = () => {
   const { boardId } = useParams();
@@ -11,6 +26,16 @@ const BoardView = () => {
   const [error, setError] = useState(null);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [addingTaskToList, setAddingTaskToList] = useState(null);
+  const [activeTask, setActiveTask] = useState(null);
+  const [selectedTask, setSelectedTask] = useState(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    })
+  );
 
   useEffect(() => {
     fetchBoardData();
@@ -29,6 +54,79 @@ const BoardView = () => {
       console.error("Error fetching board data:", err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleTaskUpdate = (updatedTask) => {
+    setTasks(
+      tasks.map((task) => (task._id === updatedTask._id ? updatedTask : task))
+    );
+  };
+
+  const handleDragStart = (event) => {
+    const { active } = event;
+    setActiveTask(tasks.find((task) => task._id === active.id));
+  };
+
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+
+    if (!over) return;
+
+    const activeTask = tasks.find((task) => task._id === active.id);
+    const overTask = tasks.find((task) => task._id === over.id);
+
+    if (!activeTask) return;
+
+    const activeListId = activeTask.listId;
+    const overListId = overTask ? overTask.listId : over.id;
+
+    // If task was dropped in a different list
+    const isNewList = activeListId !== overListId;
+
+    const updatedTasks = tasks.map((task) => {
+      if (task._id === activeTask._id) {
+        return { ...task, listId: overListId };
+      }
+      return task;
+    });
+
+    // Update positions
+    const filteredTasks = updatedTasks.filter(
+      (task) => task.listId === overListId
+    );
+    const oldIndex = filteredTasks.findIndex(
+      (task) => task._id === activeTask._id
+    );
+    const newIndex = filteredTasks.findIndex(
+      (task) => task._id === overTask?.id
+    );
+
+    const reorderedTasks = arrayMove(filteredTasks, oldIndex, newIndex);
+
+    // Update positions in the array
+    const finalTasks = updatedTasks.map((task) => {
+      if (task.listId === overListId) {
+        const position = reorderedTasks.findIndex((t) => t._id === task._id);
+        return { ...task, position };
+      }
+      return task;
+    });
+
+    setTasks(finalTasks);
+
+    try {
+      await axios.put(`/api/boards/${boardId}/tasks/reorder`, {
+        tasks: finalTasks.map((task) => ({
+          id: task._id,
+          listId: task.listId,
+          position: task.position,
+        })),
+      });
+    } catch (err) {
+      console.error("Error updating task positions:", err);
+      // Revert to previous state on error
+      setTasks(tasks);
     }
   };
 
@@ -85,67 +183,93 @@ const BoardView = () => {
         )}
       </div>
 
-      <div className="flex gap-6 overflow-x-auto pb-4">
-        {board.lists.map((list) => (
-          <div
-            key={list._id}
-            className="flex-shrink-0 w-72 bg-gray-100 rounded-lg p-4"
-          >
-            <h3 className="font-semibold mb-4">{list.title}</h3>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCorners}
+        onDragStart={handleDragStart}
+        onDragEnd={handleDragEnd}
+      >
+        <div className="flex gap-6 overflow-x-auto pb-4">
+          {board.lists.map((list) => {
+            const listTasks = tasks
+              .filter((task) => task.listId === list._id)
+              .sort((a, b) => a.position - b.position);
 
-            <div className="space-y-3">
-              {tasks
-                .filter((task) => task.listId === list._id)
-                .sort((a, b) => a.position - b.position)
-                .map((task) => (
-                  <div
-                    key={task._id}
-                    className="bg-white p-3 rounded shadow-sm hover:shadow-md cursor-pointer"
-                  >
-                    <p>{task.title}</p>
-                  </div>
-                ))}
-            </div>
-
-            {addingTaskToList === list._id ? (
-              <div className="mt-3">
-                <textarea
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  placeholder="Enter task title..."
-                  className="w-full p-2 border rounded-md mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows="2"
-                />
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleAddTask(list._id)}
-                    className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
-                  >
-                    Add Task
-                  </button>
-                  <button
-                    onClick={() => {
-                      setAddingTaskToList(null);
-                      setNewTaskTitle("");
-                    }}
-                    className="px-3 py-1.5 text-gray-600 hover:text-gray-800"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingTaskToList(list._id)}
-                className="mt-3 flex items-center gap-1 text-gray-600 hover:text-gray-800"
+            return (
+              <div
+                key={list._id}
+                className="flex-shrink-0 w-72 bg-gray-100 rounded-lg p-4"
               >
-                <Plus size={20} />
-                Add a task
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
+                <h3 className="font-semibold mb-4">{list.title}</h3>
+
+                <SortableContext
+                  items={listTasks.map((task) => task._id)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-3">
+                    {listTasks.map((task) => (
+                      <TaskCard
+                        key={task._id}
+                        task={task}
+                        onClick={() => setSelectedTask(task)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+
+                {addingTaskToList === list._id ? (
+                  <div className="mt-3">
+                    <textarea
+                      value={newTaskTitle}
+                      onChange={(e) => setNewTaskTitle(e.target.value)}
+                      placeholder="Enter task title..."
+                      className="w-full p-2 border rounded-md mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      rows="2"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleAddTask(list._id)}
+                        className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
+                      >
+                        Add Task
+                      </button>
+                      <button
+                        onClick={() => {
+                          setAddingTaskToList(null);
+                          setNewTaskTitle("");
+                        }}
+                        className="px-3 py-1.5 text-gray-600 hover:text-gray-800"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setAddingTaskToList(list._id)}
+                    className="mt-3 flex items-center gap-1 text-gray-600 hover:text-gray-800"
+                  >
+                    <Plus size={20} />
+                    Add a task
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <DragOverlay>
+          {activeTask ? <TaskCard task={activeTask} /> : null}
+        </DragOverlay>
+        {selectedTask && (
+          <TaskModal
+            task={selectedTask}
+            boardId={boardId}
+            onClose={() => setSelectedTask(null)}
+            onUpdate={handleTaskUpdate}
+          />
+        )}
+      </DndContext>
     </div>
   );
 };

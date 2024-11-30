@@ -7,6 +7,7 @@ import AboutPage from "./screens/AboutPage";
 import LoginPage from "./screens/LoginPage";
 import RegisterPage from "./screens/RegisterPage";
 import DashboardPage from "./screens/DashboardPage";
+import BoardView from "./components/BoardView"; // Import BoardView component
 import ProtectedRoute from "./components/ProtectedRoute";
 import axios from "axios";
 
@@ -53,6 +54,15 @@ export default function App() {
             element={
               <ProtectedRoute isLoggedIn={isLoggedIn}>
                 <DashboardPage />
+              </ProtectedRoute>
+            }
+          />
+          {/* Add the new board route */}
+          <Route
+            path="/board/:boardId"
+            element={
+              <ProtectedRoute isLoggedIn={isLoggedIn}>
+                <BoardView />
               </ProtectedRoute>
             }
           />
