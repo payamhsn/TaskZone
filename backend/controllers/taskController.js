@@ -121,63 +121,148 @@ const updateTask = asyncHandler(async (req, res) => {
   res.json(updatedTask);
 });
 
-// @desc    Delete task
-// @route   DELETE /api/boards/:boardId/tasks/:id
-// @access  Private
+// // @desc    Delete a task
+// // @route   DELETE /api/boards/:boardId/tasks/:id
+// // @access  Private
+// const deleteTask = asyncHandler(async (req, res) => {
+//   const boardId = req.params.boardId;
+//   const taskId = req.params.id;
+
+//   // First check if the board exists and user has access
+//   const board = await Board.findById(boardId);
+//   if (!board) {
+//     res.status(404);
+//     throw new Error("Board not found");
+//   }
+
+//   // Check if user has permission to modify this board
+//   if (
+//     board.owner.toString() !== req.user._id.toString() &&
+//     !board.members.includes(req.user._id)
+//   ) {
+//     res.status(403);
+//     throw new Error("Not authorized to modify tasks in this board");
+//   }
+
+//   const task = await Task.findOne({ _id: taskId, boardId });
+
+//   if (!task) {
+//     res.status(404);
+//     throw new Error("Task not found");
+//   }
+
+//   await task.deleteOne();
+
+//   // Update positions of remaining tasks in the same list
+//   const tasksInList = await Task.find({ boardId, listId: task.listId });
+//   for (const remainingTask of tasksInList) {
+//     if (remainingTask.position > task.position) {
+//       remainingTask.position -= 1;
+//       await remainingTask.save();
+//     }
+//   }
+
+//   res.json({ message: "Task removed" });
+// });
+
 const deleteTask = asyncHandler(async (req, res) => {
-  const task = await Task.findById(req.params.id);
+  console.log("Delete Task Controller Hit", {
+    taskId: req.params.id,
+    boardId: req.params.boardId,
+  });
 
-  if (!task) {
-    res.status(404);
-    throw new Error("Task not found");
+  try {
+    // Find task by both taskId and boardId
+    const task = await Task.findOne({
+      _id: req.params.id,
+      boardId: req.params.boardId, // Add this condition
+    });
+
+    console.log("Found task:", task);
+
+    if (!task) {
+      console.log("Task not found");
+      res.status(404);
+      throw new Error("Task not found");
+    }
+
+    // Check if board exists and user has access
+    const board = await Board.findById(req.params.boardId);
+    if (!board) {
+      res.status(404);
+      throw new Error("Board not found");
+    }
+
+    // Check if user has permission
+    if (
+      board.owner.toString() !== req.user._id.toString() &&
+      !board.members.includes(req.user._id)
+    ) {
+      res.status(403);
+      throw new Error("Not authorized to delete tasks in this board");
+    }
+
+    // Delete the task
+    await task.deleteOne();
+    console.log("Task deleted successfully");
+
+    // Update positions of remaining tasks in the same list
+    await Task.updateMany(
+      {
+        boardId: req.params.boardId,
+        listId: task.listId,
+        position: { $gt: task.position },
+      },
+      { $inc: { position: -1 } }
+    );
+
+    res.json({ message: "Task removed", taskId: req.params.id });
+  } catch (error) {
+    console.error("Error in deleteTask:", error);
+    throw error;
   }
-
-  // Check board access
-  const board = await Board.findById(task.boardId);
-  if (
-    board.owner.toString() !== req.user._id.toString() &&
-    !board.members.includes(req.user._id)
-  ) {
-    res.status(403);
-    throw new Error("Not authorized to delete this task");
-  }
-
-  await task.deleteOne();
-
-  res.json({ message: "Task removed" });
 });
 
 // @desc    Update task positions (for drag and drop)
 // @route   PUT /api/boards/:boardId/tasks/reorder
 // @access  Private
 const reorderTasks = asyncHandler(async (req, res) => {
-  const { tasks } = req.body;
+  const { tasks: updatedTasks } = req.body;
   const boardId = req.params.boardId;
 
-  // Check board access
-  const board = await Board.findById(boardId);
-  if (!board) {
-    res.status(404);
-    throw new Error("Board not found");
+  console.log("Reorder request received:", {
+    boardId,
+    updatedTasks,
+  });
+
+  try {
+    // Verify board exists and user has access
+    const board = await Board.findById(boardId);
+    if (!board) {
+      res.status(404);
+      throw new Error("Board not found");
+    }
+
+    // Update each task
+    const updatePromises = updatedTasks.map(({ id, listId, position }) =>
+      Task.findOneAndUpdate(
+        { _id: id, boardId },
+        { listId, position },
+        { new: true }
+      )
+    );
+
+    await Promise.all(updatePromises);
+
+    // Get all updated tasks
+    const allTasks = await Task.find({ boardId }).sort({ position: 1 });
+
+    console.log("Tasks reordered successfully");
+    res.json(allTasks);
+  } catch (error) {
+    console.error("Error in reorderTasks:", error);
+    throw error;
   }
-
-  if (
-    board.owner.toString() !== req.user._id.toString() &&
-    !board.members.includes(req.user._id)
-  ) {
-    res.status(403);
-    throw new Error("Not authorized to reorder tasks");
-  }
-
-  // Update each task's position and listId
-  const updatePromises = tasks.map(({ id, position, listId }) =>
-    Task.findByIdAndUpdate(id, { position, listId })
-  );
-
-  await Promise.all(updatePromises);
-
-  const updatedTasks = await Task.find({ boardId }).sort({ position: 1 });
-  res.json(updatedTasks);
 });
 
 // @desc    Assign task to user

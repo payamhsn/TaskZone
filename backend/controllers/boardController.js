@@ -135,7 +135,177 @@ const addBoardMember = asyncHandler(async (req, res) => {
   res.json(board);
 });
 
+// @desc    Add new list to board
+// @route   POST /api/boards/:id/lists
+// @access  Private
+const addList = asyncHandler(async (req, res) => {
+  const { title } = req.body;
+  const board = await Board.findById(req.params.id);
+
+  if (!board) {
+    res.status(404);
+    throw new Error("Board not found");
+  }
+
+  // Check ownership or membership
+  if (
+    board.owner.toString() !== req.user._id.toString() &&
+    !board.members.includes(req.user._id)
+  ) {
+    res.status(403);
+    throw new Error("Not authorized to modify this board");
+  }
+
+  // Get highest position for new list
+  const maxPosition = board.lists.reduce(
+    (max, list) => Math.max(max, list.position),
+    -1
+  );
+
+  board.lists.push({
+    title,
+    position: maxPosition + 1,
+  });
+
+  const updatedBoard = await board.save();
+  res.status(201).json(updatedBoard.lists[updatedBoard.lists.length - 1]);
+});
+
+// @desc    Update list
+// @route   PUT /api/boards/:id/lists/:listId
+// @access  Private
+const updateList = asyncHandler(async (req, res) => {
+  const board = await Board.findById(req.params.id);
+  const { title, position } = req.body;
+
+  if (!board) {
+    res.status(404);
+    throw new Error("Board not found");
+  }
+
+  // Check ownership or membership
+  if (
+    board.owner.toString() !== req.user._id.toString() &&
+    !board.members.includes(req.user._id)
+  ) {
+    res.status(403);
+    throw new Error("Not authorized to modify this board");
+  }
+
+  const listIndex = board.lists.findIndex(
+    (list) => list._id.toString() === req.params.listId
+  );
+
+  if (listIndex === -1) {
+    res.status(404);
+    throw new Error("List not found");
+  }
+
+  // Update list properties
+  if (title) board.lists[listIndex].title = title;
+  if (typeof position === "number") {
+    // Reorder lists if position changed
+    const oldPosition = board.lists[listIndex].position;
+    if (position !== oldPosition) {
+      board.lists.forEach((list) => {
+        if (position > oldPosition) {
+          if (list.position <= position && list.position > oldPosition) {
+            list.position--;
+          }
+        } else {
+          if (list.position >= position && list.position < oldPosition) {
+            list.position++;
+          }
+        }
+      });
+      board.lists[listIndex].position = position;
+    }
+  }
+
+  const updatedBoard = await board.save();
+  res.json(updatedBoard.lists[listIndex]);
+});
+
+// @desc    Delete list
+// @route   DELETE /api/boards/:id/lists/:listId
+// @access  Private
+const deleteList = asyncHandler(async (req, res) => {
+  const board = await Board.findById(req.params.id);
+
+  if (!board) {
+    res.status(404);
+    throw new Error("Board not found");
+  }
+
+  // Check ownership
+  if (board.owner.toString() !== req.user._id.toString()) {
+    res.status(403);
+    throw new Error("Not authorized to delete lists");
+  }
+
+  const listIndex = board.lists.findIndex(
+    (list) => list._id.toString() === req.params.listId
+  );
+
+  if (listIndex === -1) {
+    res.status(404);
+    throw new Error("List not found");
+  }
+
+  const deletedPosition = board.lists[listIndex].position;
+
+  // Remove the list
+  board.lists.splice(listIndex, 1);
+
+  // Update positions of remaining lists
+  board.lists.forEach((list) => {
+    if (list.position > deletedPosition) {
+      list.position--;
+    }
+  });
+
+  await board.save();
+  res.json({ message: "List removed" });
+});
+
+// @desc    Reorder lists
+// @route   PUT /api/boards/:id/lists/reorder
+// @access  Private
+const reorderLists = asyncHandler(async (req, res) => {
+  const { lists } = req.body;
+  const board = await Board.findById(req.params.id);
+
+  if (!board) {
+    res.status(404);
+    throw new Error("Board not found");
+  }
+
+  // Check ownership or membership
+  if (
+    board.owner.toString() !== req.user._id.toString() &&
+    !board.members.includes(req.user._id)
+  ) {
+    res.status(403);
+    throw new Error("Not authorized to modify this board");
+  }
+
+  // Update positions for all lists
+  lists.forEach(({ id, position }) => {
+    const list = board.lists.find((l) => l._id.toString() === id);
+    if (list) {
+      list.position = position;
+    }
+  });
+
+  const updatedBoard = await board.save();
+  res.json(updatedBoard.lists);
+});
+
 export {
+  addList,
+  updateList,
+  deleteList,
+  reorderLists,
   createBoard,
   getBoards,
   getBoardById,

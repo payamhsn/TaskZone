@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { useParams } from "react-router-dom";
-import { Plus, MoreVertical } from "lucide-react";
+import { Plus, MoreVertical, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -24,10 +24,13 @@ const BoardView = () => {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [newTaskTitle, setNewTaskTitle] = useState("");
-  const [addingTaskToList, setAddingTaskToList] = useState(null);
-  const [activeTask, setActiveTask] = useState(null);
   const [selectedTask, setSelectedTask] = useState(null);
+  const [showAddList, setShowAddList] = useState(false);
+  const [newListTitle, setNewListTitle] = useState("");
+  const [activeTask, setActiveTask] = useState(null);
+  const [showBoardMenu, setShowBoardMenu] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editedTitle, setEditedTitle] = useState(board?.title || "");
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -57,109 +60,134 @@ const BoardView = () => {
     }
   };
 
-  const handleTaskUpdate = (updatedTask) => {
-    setTasks(
-      tasks.map((task) => (task._id === updatedTask._id ? updatedTask : task))
-    );
+  const handleAddList = async () => {
+    if (!newListTitle.trim()) return;
+    try {
+      const { data } = await axios.post(`/api/boards/${boardId}/lists`, {
+        title: newListTitle,
+      });
+      setBoard({
+        ...board,
+        lists: [...board.lists, data],
+      });
+      setNewListTitle("");
+      setShowAddList(false);
+    } catch (err) {
+      console.error("Error adding list:", err);
+    }
+  };
+
+  const handleUpdateBoard = async (updates) => {
+    try {
+      const { data } = await axios.put(`/api/boards/${boardId}`, updates);
+      setBoard(data);
+    } catch (err) {
+      console.error("Error updating board:", err);
+    }
+  };
+
+  const handleTitleSubmit = async () => {
+    if (editedTitle.trim() && editedTitle !== board.title) {
+      await handleUpdateBoard({ title: editedTitle });
+    }
+    setIsEditingTitle(false);
+  };
+
+  const handleStarBoard = async () => {
+    await handleUpdateBoard({ isStarred: !board.isStarred });
+  };
+
+  const handleBackgroundChange = async (color) => {
+    await handleUpdateBoard({ background: color });
+  };
+
+  const handleAddTask = async (listId, title) => {
+    if (!title.trim()) return;
+    try {
+      const { data } = await axios.post(`/api/boards/${boardId}/tasks`, {
+        title,
+        listId,
+      });
+      setTasks([...tasks, data]);
+    } catch (err) {
+      console.error("Error adding task:", err);
+    }
+  };
+
+  const handleDeleteTask = async (taskId) => {
+    try {
+      console.log("Deleting task:", taskId);
+      await axios.delete(`/api/boards/${boardId}/tasks/${taskId}`);
+      setTasks((currentTasks) =>
+        currentTasks.filter((task) => task._id !== taskId)
+      );
+    } catch (err) {
+      console.error("Error deleting task:", err);
+    }
   };
 
   const handleDragStart = (event) => {
     const { active } = event;
     setActiveTask(tasks.find((task) => task._id === active.id));
   };
-
   const handleDragEnd = async (event) => {
     const { active, over } = event;
 
-    if (!over) return;
+    if (!active || !over) return;
 
     const activeTask = tasks.find((task) => task._id === active.id);
-    const overTask = tasks.find((task) => task._id === over.id);
-
     if (!activeTask) return;
 
-    const activeListId = activeTask.listId;
-    const overListId = overTask ? overTask.listId : over.id;
-
-    // If task was dropped in a different list
-    const isNewList = activeListId !== overListId;
-
-    const updatedTasks = tasks.map((task) => {
-      if (task._id === activeTask._id) {
-        return { ...task, listId: overListId };
-      }
-      return task;
-    });
-
-    // Update positions
-    const filteredTasks = updatedTasks.filter(
-      (task) => task.listId === overListId
-    );
-    const oldIndex = filteredTasks.findIndex(
-      (task) => task._id === activeTask._id
-    );
-    const newIndex = filteredTasks.findIndex(
-      (task) => task._id === overTask?.id
-    );
-
-    const reorderedTasks = arrayMove(filteredTasks, oldIndex, newIndex);
-
-    // Update positions in the array
-    const finalTasks = updatedTasks.map((task) => {
-      if (task.listId === overListId) {
-        const position = reorderedTasks.findIndex((t) => t._id === task._id);
-        return { ...task, position };
-      }
-      return task;
-    });
-
-    setTasks(finalTasks);
-
     try {
-      await axios.put(`/api/boards/${boardId}/tasks/reorder`, {
-        tasks: finalTasks.map((task) => ({
-          id: task._id,
-          listId: task.listId,
-          position: task.position,
-        })),
+      // Save original tasks state for rollback if needed
+      const originalTasks = [...tasks];
+
+      // Calculate new list ID and position
+      const targetListId =
+        over.data?.current?.sortable?.containerId || activeTask.listId;
+      const targetTasks = tasks.filter((task) => task.listId === targetListId);
+      const newPosition = targetTasks.length;
+
+      // Create updated task
+      const updatedTask = {
+        ...activeTask,
+        listId: targetListId,
+        position: newPosition,
+      };
+
+      // Update local state first (optimistic update)
+      const newTasks = tasks.map((task) =>
+        task._id === activeTask._id ? updatedTask : task
+      );
+
+      // Update state immediately
+      setTasks(newTasks);
+
+      // Send update to backend
+      const { data } = await axios.put(`/api/boards/${boardId}/tasks/reorder`, {
+        tasks: [
+          {
+            id: activeTask._id,
+            listId: targetListId,
+            position: newPosition,
+          },
+        ],
       });
-    } catch (err) {
-      console.error("Error updating task positions:", err);
-      // Revert to previous state on error
-      setTasks(tasks);
+
+      // If successful, update with server response
+      if (data) {
+        setTasks(data);
+      }
+    } catch (error) {
+      console.error("Error moving task:", error);
+      // Refresh data from server on error
+      fetchBoardData();
     }
   };
-
-  const handleAddTask = async (listId) => {
-    if (!newTaskTitle.trim()) return;
-
-    try {
-      const { data } = await axios.post(`/api/boards/${boardId}/tasks`, {
-        title: newTaskTitle,
-        listId,
-      });
-      setTasks([...tasks, data]);
-      setNewTaskTitle("");
-      setAddingTaskToList(null);
-    } catch (err) {
-      console.error("Error adding task:", err);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-[200px]">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900"></div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="p-4">
-        <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
-          {error}
-        </div>
       </div>
     );
   }
@@ -171,18 +199,134 @@ const BoardView = () => {
       className="min-h-screen p-6"
       style={{ backgroundColor: board.background }}
     >
+      {/* Board Header */}
       <div className="mb-6">
         <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-white">{board.title}</h1>
-          <button className="text-white hover:bg-white/20 p-2 rounded-md">
-            <MoreVertical size={20} />
-          </button>
+          {isEditingTitle ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleTitleSubmit();
+              }}
+              className="flex-1 mr-4"
+            >
+              <input
+                type="text"
+                value={editedTitle}
+                onChange={(e) => setEditedTitle(e.target.value)}
+                className="text-2xl font-bold bg-black/10 text-white px-2 py-1 rounded w-full focus:outline-none focus:ring-2 focus:ring-white/50"
+                autoFocus
+                onBlur={handleTitleSubmit}
+              />
+            </form>
+          ) : (
+            <h1
+              className="text-2xl font-bold text-white cursor-pointer hover:bg-white/10 px-2 py-1 rounded"
+              onClick={() => {
+                setEditedTitle(board.title);
+                setIsEditingTitle(true);
+              }}
+            >
+              {board.title}
+            </h1>
+          )}
+          <div className="relative">
+            <button
+              onClick={() => setShowBoardMenu(!showBoardMenu)}
+              className="text-white hover:bg-white/20 p-2 rounded-md"
+            >
+              <MoreVertical size={20} />
+            </button>
+
+            {showBoardMenu && (
+              <div className="absolute right-0 mt-2 w-64 bg-white rounded-lg shadow-lg z-50">
+                <div className="p-4">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">
+                    Menu
+                  </h3>
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => {
+                        setIsEditingTitle(true);
+                        setShowBoardMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded"
+                    >
+                      Edit Title
+                    </button>
+                    <button
+                      onClick={() => {
+                        handleStarBoard();
+                        setShowBoardMenu(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded"
+                    >
+                      {board.isStarred
+                        ? "Remove from Starred"
+                        : "Add to Starred"}
+                    </button>
+                    <div className="border-t border-gray-200 my-2 pt-2">
+                      <p className="text-sm text-gray-600 mb-2 px-3">
+                        Background
+                      </p>
+                      <div className="flex flex-wrap gap-2 px-3">
+                        {[
+                          "#2D4059", // Navy Blue
+                          "#437C90", // Steel Blue
+                          "#5C9EAD", // Teal
+                          "#885A5A", // Dusty Rose
+                          "#4A5859", // Slate Gray
+                          "#6B4423", // Brown
+                        ].map((color) => (
+                          <button
+                            key={color}
+                            onClick={() => {
+                              handleBackgroundChange(color);
+                              setShowBoardMenu(false);
+                            }}
+                            className={`w-8 h-8 rounded-md ${
+                              board.background === color
+                                ? "ring-2 ring-blue-500 ring-offset-2"
+                                : ""
+                            }`}
+                            style={{ backgroundColor: color }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div className="border-t border-gray-200 my-2 pt-2">
+                      <button
+                        onClick={async () => {
+                          if (
+                            window.confirm(
+                              "Are you sure you want to delete this board?"
+                            )
+                          ) {
+                            try {
+                              await axios.delete(`/api/boards/${boardId}`);
+                              window.location.href = "/dashboard";
+                            } catch (err) {
+                              console.error("Error deleting board:", err);
+                            }
+                          }
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded"
+                      >
+                        Delete Board
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
         {board.description && (
           <p className="text-white/80 mt-2">{board.description}</p>
         )}
       </div>
 
+      {/* Lists Container */}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -190,86 +334,110 @@ const BoardView = () => {
         onDragEnd={handleDragEnd}
       >
         <div className="flex gap-6 overflow-x-auto pb-4">
-          {board.lists.map((list) => {
-            const listTasks = tasks
-              .filter((task) => task.listId === list._id)
-              .sort((a, b) => a.position - b.position);
+          {/* Lists */}
+          {board.lists.map((list) => (
+            <div
+              key={list._id}
+              className="flex-shrink-0 w-72 bg-gray-100 rounded-lg p-4"
+            >
+              <h3 className="font-semibold mb-4">{list.title}</h3>
 
-            return (
-              <div
-                key={list._id}
-                className="flex-shrink-0 w-72 bg-gray-100 rounded-lg p-4"
+              <SortableContext
+                id={list._id} // Add this
+                items={tasks
+                  .filter((task) => task.listId === list._id)
+                  .map((task) => task._id)}
+                strategy={verticalListSortingStrategy}
               >
-                <h3 className="font-semibold mb-4">{list.title}</h3>
-
-                <SortableContext
-                  items={listTasks.map((task) => task._id)}
-                  strategy={verticalListSortingStrategy}
-                >
-                  <div className="space-y-3">
-                    {listTasks.map((task) => (
+                <div className="space-y-3" data-list-id={list._id}>
+                  {" "}
+                  {/* Add this */}
+                  {tasks
+                    .filter((task) => task.listId === list._id)
+                    .sort((a, b) => a.position - b.position)
+                    .map((task) => (
                       <TaskCard
                         key={task._id}
                         task={task}
                         onClick={() => setSelectedTask(task)}
+                        onDelete={() => handleDeleteTask(task._id)}
                       />
                     ))}
-                  </div>
-                </SortableContext>
+                </div>
+              </SortableContext>
 
-                {addingTaskToList === list._id ? (
-                  <div className="mt-3">
-                    <textarea
-                      value={newTaskTitle}
-                      onChange={(e) => setNewTaskTitle(e.target.value)}
-                      placeholder="Enter task title..."
-                      className="w-full p-2 border rounded-md mb-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      rows="2"
-                    />
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleAddTask(list._id)}
-                        className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
-                      >
-                        Add Task
-                      </button>
-                      <button
-                        onClick={() => {
-                          setAddingTaskToList(null);
-                          setNewTaskTitle("");
-                        }}
-                        className="px-3 py-1.5 text-gray-600 hover:text-gray-800"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setAddingTaskToList(list._id)}
-                    className="mt-3 flex items-center gap-1 text-gray-600 hover:text-gray-800"
-                  >
-                    <Plus size={20} />
-                    Add a task
-                  </button>
-                )}
+              {/* Add Task Button */}
+              <button
+                onClick={() => handleAddTask(list._id, "New Task")}
+                className="mt-3 flex items-center gap-1 text-gray-600 hover:text-gray-800"
+              >
+                <Plus size={20} />
+                Add a task
+              </button>
+            </div>
+          ))}
+
+          {/* Add List Button */}
+          {showAddList ? (
+            <div className="flex-shrink-0 w-72 bg-gray-100 rounded-lg p-4">
+              <input
+                type="text"
+                value={newListTitle}
+                onChange={(e) => setNewListTitle(e.target.value)}
+                placeholder="Enter list title..."
+                className="w-full px-3 py-2 border rounded-md mb-2"
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleAddList}
+                  className="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600"
+                >
+                  Add List
+                </button>
+                <button
+                  onClick={() => {
+                    setShowAddList(false);
+                    setNewListTitle("");
+                  }}
+                  className="p-1.5 hover:bg-gray-200 rounded"
+                >
+                  <X size={16} />
+                </button>
               </div>
-            );
-          })}
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAddList(true)}
+              className="flex-shrink-0 w-72 bg-gray-100/50 hover:bg-gray-100 rounded-lg p-4 flex items-center gap-2 text-gray-600"
+            >
+              <Plus size={20} />
+              Add another list
+            </button>
+          )}
         </div>
 
         <DragOverlay>
           {activeTask ? <TaskCard task={activeTask} /> : null}
         </DragOverlay>
-        {selectedTask && (
-          <TaskModal
-            task={selectedTask}
-            boardId={boardId}
-            onClose={() => setSelectedTask(null)}
-            onUpdate={handleTaskUpdate}
-          />
-        )}
       </DndContext>
+
+      {/* Task Modal */}
+      {selectedTask && (
+        <TaskModal
+          task={selectedTask}
+          boardId={boardId}
+          onClose={() => setSelectedTask(null)}
+          onUpdate={(updatedTask) => {
+            setTasks(
+              tasks.map((task) =>
+                task._id === updatedTask._id ? updatedTask : task
+              )
+            );
+            setSelectedTask(null);
+          }}
+        />
+      )}
     </div>
   );
 };

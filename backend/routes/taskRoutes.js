@@ -6,22 +6,20 @@ import {
   updateTask,
   deleteTask,
   reorderTasks,
-  assignTask,
 } from "../controllers/taskController.js";
 import { protect } from "../middleware/authMiddleware.js";
 
-const router = express.Router({ mergeParams: true }); // Enable access to boardId param
+const router = express.Router({ mergeParams: true });
 
-router.route("/").post(protect, createTask).get(protect, getTasks);
+// Important: Put the reorder route BEFORE the /:id routes
+router.put("/reorder", protect, reorderTasks);
 
-router.route("/reorder").put(protect, reorderTasks);
+router.route("/").get(protect, getTasks).post(protect, createTask);
 
 router
   .route("/:id")
   .get(protect, getTaskById)
   .put(protect, updateTask)
   .delete(protect, deleteTask);
-
-router.route("/:id/assign").post(protect, assignTask);
 
 export default router;

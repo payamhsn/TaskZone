@@ -15,14 +15,23 @@ connectDB();
 
 const app = express();
 
+app.use((req, res, next) => {
+  console.log("Incoming request:", {
+    method: req.method,
+    url: req.url,
+    path: req.path,
+  });
+  next();
+});
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 app.use(cookieParser());
 
 app.use("/api/users", userRoutes);
+app.use("/api/boards/:boardId/tasks", taskRoutes); // This must come before boardRoutes
 app.use("/api/boards", boardRoutes);
-app.use("/api/boards/:boardId/tasks", taskRoutes);
 
 if (process.env.NODE_ENV === "production") {
   const __dirname = path.resolve();

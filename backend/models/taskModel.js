@@ -10,27 +10,18 @@ const taskSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    listId: {
-      type: mongoose.Schema.Types.ObjectId,
-      required: true,
-    },
     boardId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Board",
       required: true,
     },
+    listId: {
+      type: String,
+      required: true,
+    },
     position: {
       type: Number,
       required: true,
-    },
-    assignedTo: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "User",
-      },
-    ],
-    dueDate: {
-      type: Date,
     },
     labels: [
       {
@@ -38,20 +29,23 @@ const taskSchema = new mongoose.Schema(
         color: String,
       },
     ],
-    isComplete: {
-      type: Boolean,
-      default: false,
-    },
+    dueDate: Date,
+    assignedTo: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
   },
   {
     timestamps: true,
   }
 );
 
-// Add indexes for faster queries
+// Add indexes for better query performance
 taskSchema.index({ boardId: 1 });
 taskSchema.index({ listId: 1 });
-taskSchema.index({ assignedTo: 1 });
+taskSchema.index({ boardId: 1, listId: 1 });
 
 const Task = mongoose.model("Task", taskSchema);
 
